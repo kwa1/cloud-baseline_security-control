@@ -10,8 +10,55 @@ on:
 permissions: {}
 
 jobs:
-  security-check:
+  policy-tests:
+    # Fails the build if any OPA rule regresses (e.g. a gate that silently passes).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install OPA (checksum-verified)
+        env:
+          OPA_VERSION: "1.22.4"
+          OPA_SHA256: "35e3b352e715e80624ead6c89930d8585f6f7d94cdc409eb2a9fe36620dcccba"
+        run: |
+          curl -fsSL -o opa "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64_static"
+          echo "${OPA_SHA256}  opa" | sha256sum -c -
+          sudo install -m 0755 opa /usr/local/bin/opa
+
+      - name: Static check and unit tests
+        run: |
+          opa check policy/
+          opa test policy/
+
+  python-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Compile and install pinned dependencies
+        run: |
+          python -m py_compile scripts/*.py
+          python -m pip install --no-cache-dir -r scripts/requirements.txt
+
+  ci:
     # Local reusable workflow in this repository; environment is resolved inside it from the git ref.
+    needs: [policy-tests, python-checks]
     uses: ./.github/workflows/mitre-security-pipeline.yml
     permissions:
       contents: read

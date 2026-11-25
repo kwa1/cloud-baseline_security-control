@@ -103,11 +103,12 @@ jobs:
           trivy image --format cyclonedx \
             --output sbom.json "$IMAGE_REF"
 
-      - name: SBOM vulnerability scan
+      - name: Vulnerability report (JSON, from image)
         run: |
-          trivy sbom sbom.json --format json \
+          trivy image --format json \
             --output vuln-report.json \
-            --severity CRITICAL,HIGH,MEDIUM,LOW
+            --severity CRITICAL,HIGH,MEDIUM,LOW \
+            "$IMAGE_REF"
 
       - name: MITRE analysis
         run: |
@@ -182,9 +183,11 @@ jobs:
 
       - name: Push metrics to CloudWatch
         run: |
+          python3 -m pip install --no-cache-dir -r scripts/requirements.txt
           python3 scripts/cloudwatch_metrics.py \
             --vuln-report vuln-report.json \
-            --mitre-report mitre-analysis.json
+            --mitre-report mitre-analysis.json \
+            --region "$AWS_REGION"
         env:
           AWS_REGION: ${{ inputs.aws_region }}
 

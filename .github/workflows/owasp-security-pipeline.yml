@@ -64,13 +64,26 @@ jobs:
       - name: Build image
         run: docker buildx build --load -t "$IMAGE_REF" .
 
-      - name: Trivy image scan
+      - name: Trivy image scan (JSON)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ inputs.image_name }}:${{ github.sha }}
           format: json
           output: vuln-report.json
           severity: CRITICAL,HIGH,MEDIUM,LOW
+
+      - name: Trivy image scan (SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ inputs.image_name }}:${{ github.sha }}
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+
+      - name: Upload Trivy SARIF results
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: trivy.sarif
 
       - name: Generate SBOM
         run: trivy image --format cyclonedx --output sbom.json "$IMAGE_REF"

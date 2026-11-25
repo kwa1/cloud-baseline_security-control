@@ -34,8 +34,8 @@ COPY --chown=10001:0 scripts/ scripts/
 
 USER 10001
 
-# Liveness: the interpreter and the pinned dependency set must import cleanly.
+# Health: the pinned dependency set imports and the analyzers are present.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD python3 -c "import boto3" || exit 1
+  CMD python3 -c "import boto3; import json" && test -f scripts/owasp_analyzer.py || exit 1
 
-CMD ["python3", "scripts/cloudwatch_metrics.py", "--help"]
+CMD ["python3", "scripts/owasp_analyzer.py", "--help"]
