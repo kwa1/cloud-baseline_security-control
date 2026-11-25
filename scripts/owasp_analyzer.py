@@ -22,7 +22,9 @@ OWASP_MAPPING = {
     "Untrusted Source": "A08",
 }
 
-DEFAULT_CATEGORY = "A06"
+# Findings with no matching keyword are reported as UNCLASSIFIED. They are not blocked by the
+# OWASP gate, so a generic OS CVE is not mislabelled as "Vulnerable and Outdated Components".
+DEFAULT_CATEGORY = "UNCLASSIFIED"
 
 CONTROL_MAP = {
     "A01": {"iso": ["A.9.1", "A.9.4"], "nist": ["AC-3", "AC-6"]},
