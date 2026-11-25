@@ -36,6 +36,14 @@ jobs:
           opa check policy/
           opa test policy/
 
+      - name: Block unresolved exception approval references
+        # Fails the build while any exception still carries the TBD placeholder instead of a CISO approval reference.
+        run: |
+          if grep -rn "Approval reference: TBD" exceptions/; then
+            echo "::error::Exception approval reference is TBD; record the CISO approval reference before release."
+            exit 1
+          fi
+
   python-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10

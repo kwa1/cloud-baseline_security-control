@@ -4,7 +4,7 @@
       "id": "RISK-2025-001",
       "owasp": "A06",
       "expires": "2030-03-01",
-      "justification": "Legacy dependency pending vendor patch. Renewed to 2030-03-01; approved by CISO (approval reference: PENDING-CISO-REF)",
+      "justification": "Legacy dependency pending vendor patch. Renewed to 2030-03-01; approved by CISO. Approval reference: TBD",
       "approved_by": "CISO"
     }
   ]
