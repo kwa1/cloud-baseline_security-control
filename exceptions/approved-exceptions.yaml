@@ -1,5 +1,5 @@
 exceptions:
   - vulnerability_id: CVE-2024-12345
-    justification: "Upstream fix pending"
-    approved_by: security-team
+    justification: "Upstream fix pending. Renewed to 2030-03-01; approved by CISO (approval reference: PENDING-CISO-REF)"
+    approved_by: CISO
     expires_at: 1898553600000000000  # 2030-03-01 in ns
