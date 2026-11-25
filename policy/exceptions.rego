@@ -1,10 +1,11 @@
 package security.exceptions
 
-default allow = false
+import rego.v1
 
-allow {
-    some e
-    e := data.exceptions.exceptions[_]
-    e.vulnerability_id == input.VulnerabilityID
-    e.expires_at > time.now_ns()
+default allow := false
+
+allow if {
+  some e in data.exceptions.exceptions
+  e.vulnerability_id == input.VulnerabilityID
+  e.expires_at > time.now_ns()
 }

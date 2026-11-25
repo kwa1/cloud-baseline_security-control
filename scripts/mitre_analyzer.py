@@ -8,7 +8,7 @@ MITRE ATT&CK Vulnerability Analyzer (v1.3.0)
 
 import json
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any
 
 # -----------------------------
@@ -51,7 +51,7 @@ class MITREAnalyzer:
 
         return {
             "metadata": {
-                "generated_at": datetime.utcnow().isoformat(),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
                 "environment": self.environment,
                 "analyzer_version": "v1.3.0"
             },

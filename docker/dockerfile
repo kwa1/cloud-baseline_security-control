@@ -1,59 +1,41 @@
 # =========================
 # Stage 1: Builder
 # =========================
-FROM python:3.12-slim AS builder
+FROM registry.redhat.io/ubi9/python-312:latest AS builder
 
-# Security: Prevents Python from writing .pyc files
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
-WORKDIR /app
+WORKDIR /build
 
-# Install build dependencies only if needed
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy dependency manifests first (better caching)
-COPY requirements.txt .
-
-# Install dependencies into a virtual environment
-RUN python -m venv /opt/venv && \
-    /opt/venv/bin/pip install --upgrade pip && \
-    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+# Dependencies are installed into an isolated venv that is copied to the runtime stage.
+COPY scripts/requirements.txt .
+RUN python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # =========================
-# Stage 2: Runtime
+# Stage 2: Runtime (non-root)
 # =========================
-FROM python:3.12-slim
+FROM registry.redhat.io/ubi9/python-312-minimal:latest
 
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-
-# Runtime environment variables
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-WORKDIR /app
+USER root
+RUN useradd -r -u 10001 -g 0 appuser \
+    && mkdir -p /app
 
-# Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
 
-# Copy application code
-COPY app/ app/
-COPY scripts/ scripts/
+WORKDIR /app
+COPY --chown=10001:0 scripts/ scripts/
 
-# Ownership hardening
-RUN chown -R appuser:appuser /app /opt/venv
+USER 10001
 
-# Drop privileges
-USER appuser
-
-# Healthcheck (important for prod)
+# Liveness: the interpreter and the pinned dependency set must import cleanly.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD python -c "import sys; sys.exit(0)"
+  CMD python3 -c "import boto3" || exit 1
 
-# Default command
-CMD ["python", "app/main.py"]
+CMD ["python3", "scripts/cloudwatch_metrics.py", "--help"]

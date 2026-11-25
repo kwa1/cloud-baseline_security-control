@@ -1,12 +1,14 @@
 package owasp.deny
 
+import rego.v1
+
 import data.owasp.severity.blocked_categories
 import data.owasp.metadata.owasp_categories
 import data.owasp.exceptions.allowed
 import data.owasp.controls.owasp_to_controls
 
-deny[msg] {
-  finding := input.findings[_]
+deny contains msg if {
+  some finding in input.findings
   finding.owasp in blocked_categories
 
   not allowed with input.finding as finding

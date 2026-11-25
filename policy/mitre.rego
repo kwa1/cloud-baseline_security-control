@@ -1,24 +1,23 @@
 package security.mitre
 
-import data.security.metadata
+import rego.v1
 
-default deny = []
+import data.security.metadata
 
 # Base risk threshold
 base_threshold := 80
 
-# Deny if any MITRE finding exceeds threshold in the current environment
-deny[msg] {
-    some f
-    f := input.mitre_findings[_]
+# Deny if any MITRE finding meets the threshold in prod.
+# Environment comes from the analyzer metadata block.
+deny contains msg if {
+  some f in input.mitre_findings
 
-    # Threshold can be overridden per environment if needed
-    threshold := base_threshold
-    input.environment == "prod"
-    f.risk_score >= threshold
+  threshold := base_threshold
+  input.metadata.environment == "prod"
+  f.risk_score >= threshold
 
-    msg := sprintf(
-        "[Policy %s][%s] MITRE technique(s) %v risk %d exceeds threshold",
-        [metadata.policy_version, input.environment, f.mitre_techniques, f.risk_score]
-    )
+  msg := sprintf(
+    "[Policy %s][%s] MITRE technique(s) %v risk %d exceeds threshold",
+    [metadata.policy_version, input.metadata.environment, f.mitre_techniques, f.risk_score]
+  )
 }

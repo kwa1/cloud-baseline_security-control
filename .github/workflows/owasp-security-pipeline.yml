@@ -9,6 +9,16 @@ on:
       image_name:
         required: true
         type: string
+      aws_role_arn:
+        required: true
+        type: string
+      aws_region:
+        required: false
+        type: string
+        default: us-east-1
+      s3_bucket:
+        required: true
+        type: string
     secrets:
       REGISTRY_USERNAME:
         required: true
@@ -16,48 +26,54 @@ on:
         required: true
       SLACK_WEBHOOK_URL:
         required: true
-      AWS_ACCESS_KEY_ID:
-        required: true
-      AWS_SECRET_ACCESS_KEY:
-        required: true
+
+permissions: {}
 
 jobs:
   security:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write
+      id-token: write
+
+    env:
+      IMAGE_REF: ${{ inputs.image_name }}:${{ github.sha }}
+      INPUT_ENVIRONMENT: ${{ inputs.environment }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Determine environment
         run: |
-          if [[ -n "${{ inputs.environment }}" ]]; then
-            echo "ENV=${{ inputs.environment }}" >> $GITHUB_ENV
+          if [[ -n "${INPUT_ENVIRONMENT}" ]]; then
+            echo "ENV=${INPUT_ENVIRONMENT}" >> "$GITHUB_ENV"
           elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
-            echo "ENV=prod" >> $GITHUB_ENV
+            echo "ENV=prod" >> "$GITHUB_ENV"
           elif [[ "$GITHUB_REF" == "refs/heads/develop" ]]; then
-            echo "ENV=staging" >> $GITHUB_ENV
+            echo "ENV=staging" >> "$GITHUB_ENV"
           else
-            echo "ENV=dev" >> $GITHUB_ENV
+            echo "ENV=dev" >> "$GITHUB_ENV"
           fi
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build image
-        run: docker build -t "${{ inputs.image_name }}:${GITHUB_SHA}" .
+        run: docker buildx build --load -t "$IMAGE_REF" .
 
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: "${{ inputs.image_name }}:${GITHUB_SHA}"
+          image-ref: ${{ inputs.image_name }}:${{ github.sha }}
           format: json
           output: vuln-report.json
           severity: CRITICAL,HIGH,MEDIUM,LOW
 
       - name: Generate SBOM
-        run: trivy image --format cyclonedx --output sbom.json "${{ inputs.image_name }}:${GITHUB_SHA}"
+        run: trivy image --format cyclonedx --output sbom.json "$IMAGE_REF"
 
       - name: OWASP Top 10 analysis
         run: |
@@ -68,9 +84,12 @@ jobs:
 
       - name: OPA policy enforcement (OWASP)
         run: |
+          # Namespace is explicit: Conftest's default ("main") evaluates zero rules and passes silently.
           conftest test owasp-report.json \
-            --policy policy/owasp/ \
-            --data exceptions/ || exit 1
+            --policy policy/Owasp10/ \
+            --namespace owasp.deny \
+            --data exceptions/owasp-approved_exceptions.json \
+            --fail-on-warn
 
       - name: Compliance mapping
         run: |
@@ -80,19 +99,41 @@ jobs:
             --frameworks NIST800-53,ISO27001,SLSA
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: security-reports
+          retention-days: 30
+          if-no-files-found: warn
           path: |
             sbom.json
             vuln-report.json
             owasp-report.json
             compliance-report.json
 
+      # OIDC: no long-lived AWS keys. Requires id-token: write and a trust policy on the role.
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ always() }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.aws_role_arn }}
+          aws-region: ${{ inputs.aws_region }}
+          role-session-name: owasp-gates-${{ github.run_id }}
+
+      - name: Archive security artifacts to S3
+        if: ${{ always() }}
+        env:
+          S3_BUCKET: ${{ inputs.s3_bucket }}
+        run: |
+          for file in sbom.json vuln-report.json owasp-report.json compliance-report.json; do
+            if [ -f "$file" ]; then
+              aws s3 cp "$file" "s3://${S3_BUCKET}/${GITHUB_REPOSITORY}/${GITHUB_SHA}/$file" --sse aws:kms
+            fi
+          done
+
       - name: Notify Slack on failure
         if: failure()
-        uses: rtCamp/action-slack-notify@v2
-        with:
-          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          message: "OWASP security gates FAILED in $ENV"
-          color: danger
+        uses: rtCamp/action-slack-notify@06cc13f74fa8d4d2296c09455d91e9453e4025f4 # v2.4.1
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_COLOR: danger
+          SLACK_MESSAGE: "OWASP security gates FAILED in ${{ env.ENV }} for image ${{ env.IMAGE_REF }}"

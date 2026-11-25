@@ -7,13 +7,20 @@ on:
   pull_request:
     branches: ["main", "develop"]
 
+permissions: {}
+
 jobs:
   security-check:
-    uses: <your-org/security-workflows>/.github/workflows/security-pipeline.yml@v1.2.0
+    # Local reusable workflow in this repository; environment is resolved inside it from the git ref.
+    uses: ./.github/workflows/mitre-security-pipeline.yml
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write
     with:
-      # Set environment dynamically
-      environment: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') && 'prod' || github.ref == 'refs/heads/develop' && 'staging' || 'dev' }}
       image_name: myapp
+      aws_role_arn: ${{ vars.AWS_SECURITY_GATES_ROLE_ARN }}
+      s3_bucket: ${{ vars.SECURITY_REPORTS_S3_BUCKET }}
     secrets:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}

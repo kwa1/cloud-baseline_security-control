@@ -14,7 +14,7 @@ Outputs:
 
 import json
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 # -----------------------------
@@ -50,7 +50,7 @@ class ComplianceMapper:
 
     def map_findings(self, vuln_report: Dict[str, Any]) -> Dict[str, Any]:
         report = {"metadata": {}, "frameworks": {}}
-        report["metadata"]["generated_at"] = datetime.utcnow().isoformat()
+        report["metadata"]["generated_at"] = datetime.now(timezone.utc).isoformat()
         report["metadata"]["frameworks"] = self.frameworks
 
         # Prepare framework-specific results

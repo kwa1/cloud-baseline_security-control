@@ -9,6 +9,16 @@ on:
       image_name:
         required: true
         type: string
+      aws_role_arn:
+        required: true
+        type: string
+      aws_region:
+        required: false
+        type: string
+        default: us-east-1
+      s3_bucket:
+        required: true
+        type: string
     secrets:
       REGISTRY_USERNAME:
         required: true
@@ -16,90 +26,82 @@ on:
         required: true
       SLACK_WEBHOOK_URL:
         required: true
-      AWS_ACCESS_KEY_ID:
-        required: true
-      AWS_SECRET_ACCESS_KEY:
-        required: true
+
+permissions: {}
 
 jobs:
   security:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write
+      id-token: write
+
+    env:
+      IMAGE_REF: ${{ inputs.image_name }}:${{ github.sha }}
+      INPUT_ENVIRONMENT: ${{ inputs.environment }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Determine environment
         id: set-env
         run: |
-          if [[ -n "${{ inputs.environment }}" ]]; then
-            echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_ENV
+          if [[ -n "${INPUT_ENVIRONMENT}" ]]; then
+            echo "ENVIRONMENT=${INPUT_ENVIRONMENT}" >> "$GITHUB_ENV"
           elif [[ "${GITHUB_REF}" == "refs/heads/main" ]] || [[ "${GITHUB_REF}" =~ refs/tags/v.* ]]; then
-            echo "ENVIRONMENT=prod" >> $GITHUB_ENV
+            echo "ENVIRONMENT=prod" >> "$GITHUB_ENV"
           elif [[ "${GITHUB_REF}" == "refs/heads/develop" ]]; then
-            echo "ENVIRONMENT=staging" >> $GITHUB_ENV
+            echo "ENVIRONMENT=staging" >> "$GITHUB_ENV"
           else
-            echo "ENVIRONMENT=dev" >> $GITHUB_ENV
+            echo "ENVIRONMENT=dev" >> "$GITHUB_ENV"
           fi
-          echo "Determined environment: $ENVIRONMENT"
+          echo "Determined environment: ${ENVIRONMENT:-unset}"
 
       - name: Set severity thresholds
         id: thresholds
         run: |
           case "$ENVIRONMENT" in
             prod)
-              echo "ALLOWED_SEVERITY=LOW,MEDIUM" >> $GITHUB_ENV
-              echo "DENY_SEVERITY=HIGH,CRITICAL" >> $GITHUB_ENV
+              echo "ALLOWED_SEVERITY=LOW,MEDIUM" >> "$GITHUB_ENV"
+              echo "DENY_SEVERITY=HIGH,CRITICAL" >> "$GITHUB_ENV"
               ;;
             staging)
-              echo "ALLOWED_SEVERITY=LOW,MEDIUM,HIGH" >> $GITHUB_ENV
-              echo "DENY_SEVERITY=CRITICAL" >> $GITHUB_ENV
+              echo "ALLOWED_SEVERITY=LOW,MEDIUM,HIGH" >> "$GITHUB_ENV"
+              echo "DENY_SEVERITY=CRITICAL" >> "$GITHUB_ENV"
               ;;
             dev|*)
-              echo "ALLOWED_SEVERITY=ALL" >> $GITHUB_ENV
-              echo "DENY_SEVERITY=" >> $GITHUB_ENV
+              echo "ALLOWED_SEVERITY=ALL" >> "$GITHUB_ENV"
+              echo "DENY_SEVERITY=" >> "$GITHUB_ENV"
               ;;
           esac
 
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Cache Docker layers
-        uses: actions/cache@v3
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build Docker image
-        run: |
-          docker build --build-arg BUILDKIT_INLINE_CACHE=1 \
-            --cache-from type=local,src=/tmp/.buildx-cache \
-            --cache-to type=local,dest=/tmp/.buildx-cache-new \
-            -t "${{ inputs.image_name }}:${GITHUB_SHA}" .
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+        run: docker buildx build --load -t "$IMAGE_REF" .
 
-      - name: Trivy image scan
-        uses: aquasecurity/trivy-action@master
+      - name: Trivy image scan (SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: "${{ inputs.image_name }}:${GITHUB_SHA}"
+          image-ref: ${{ inputs.image_name }}:${{ github.sha }}
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH,MEDIUM,LOW
 
       - name: Upload Trivy SARIF results
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           sarif_file: trivy.sarif
 
       - name: Generate SBOM (CycloneDX)
         run: |
           trivy image --format cyclonedx \
-            --output sbom.json "${{ inputs.image_name }}:${GITHUB_SHA}"
+            --output sbom.json "$IMAGE_REF"
 
       - name: SBOM vulnerability scan
         run: |
@@ -117,13 +119,26 @@ jobs:
       - name: OPA policy enforcement
         id: opa
         run: |
+          # Thresholds are passed as data (Conftest has no --set flag) under the top-level
+          # "context" key, which the policy reads as data.context. Namespaces are explicit
+          # because Conftest's default ("main") evaluates zero rules and passes silently.
+          mkdir -p policy-data
+          jq -n --arg env "$ENVIRONMENT" --arg deny "$DENY_SEVERITY" \
+            '{context: {environment: $env, deny_severity: $deny}}' > policy-data/context.json
           conftest test vuln-report.json \
             --policy policy/ \
-            --data exceptions/ \
-            --set deny_severity="${DENY_SEVERITY}" \
-            --set allowed_severity="${ALLOWED_SEVERITY}" || exit 1
-          conftest test sbom.json --policy policy/ || exit 1
-          conftest test mitre-analysis.json --policy policy/ || exit 1
+            --namespace security.vulnerabilities \
+            --data policy-data/context.json \
+            --data exceptions/approved-exceptions.yaml \
+            --fail-on-warn
+          conftest test sbom.json \
+            --policy policy/ \
+            --namespace security.sbom \
+            --fail-on-warn
+          conftest test mitre-analysis.json \
+            --policy policy/ \
+            --namespace security.mitre \
+            --fail-on-warn
 
       - name: Compliance annotations (SLSA/NIST/ISO)
         run: |
@@ -133,9 +148,11 @@ jobs:
             --frameworks SLSA,NIST800-53,ISO27001
 
       - name: Upload security artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: security-reports
+          retention-days: 30
+          if-no-files-found: warn
           path: |
             sbom.json
             vuln-report.json
@@ -143,17 +160,23 @@ jobs:
             trivy.sarif
             compliance-report.json
 
+      # OIDC: no long-lived AWS keys. Requires id-token: write and a trust policy on the role.
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ always() }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.aws_role_arn }}
+          aws-region: ${{ inputs.aws_region }}
+          role-session-name: security-gates-${{ github.run_id }}
+
       - name: Archive security artifacts to S3
         if: ${{ always() }}
         env:
-          S3_BUCKET: my-enterprise-sbom-bucket
-          AWS_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          S3_BUCKET: ${{ inputs.s3_bucket }}
         run: |
           for file in sbom.json vuln-report.json mitre-analysis.json compliance-report.json trivy.sarif; do
             if [ -f "$file" ]; then
-              aws s3 cp "$file" "s3://${S3_BUCKET}/${GITHUB_REPOSITORY}/${GITHUB_SHA}/$file"
+              aws s3 cp "$file" "s3://${S3_BUCKET}/${GITHUB_REPOSITORY}/${GITHUB_SHA}/$file" --sse aws:kms
             fi
           done
 
@@ -163,14 +186,12 @@ jobs:
             --vuln-report vuln-report.json \
             --mitre-report mitre-analysis.json
         env:
-          AWS_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ inputs.aws_region }}
 
       - name: Notify Slack on failure
         if: failure()
-        uses: rtCamp/action-slack-notify@v2
-        with:
-          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          message: "Security gates failed in $ENVIRONMENT for image ${{ inputs.image_name }}:${GITHUB_SHA}"
-          color: danger
+        uses: rtCamp/action-slack-notify@06cc13f74fa8d4d2296c09455d91e9453e4025f4 # v2.4.1
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_COLOR: danger
+          SLACK_MESSAGE: "Security gates failed in ${{ env.ENVIRONMENT }} for image ${{ env.IMAGE_REF }}"

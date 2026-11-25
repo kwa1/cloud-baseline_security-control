@@ -1,70 +1,52 @@
-#
-*/*
 package security.owasp
 
-import data.security.common
+import rego.v1
 
-# OWASP Top 10 mapping (example)
-owasp_risk_map := {
-  "A1:2021-Broken Access Control": ["privilege_escalation", "auth_bypass"],
-  "A2:2021-Cryptographic Failures": ["data_exposure", "weak_crypto"],
-  "A3:2021-Injection": ["sql_injection", "command_injection"],
-  "A4:2021-Insecure Design": ["logic_flaw", "misconfig"],
-  "A5:2021-Security Misconfiguration": ["misconfig"],
-  "A6:2021-Vulnerable and Outdated Components": ["unpatched_library", "known_cve"],
-  "A7:2021-Identification and Authentication Failures": ["auth_bypass"],
-  "A8:2021-Software and Data Integrity Failures": ["untrusted_deserialization"],
-  "A9:2021-Security Logging and Monitoring Failures": ["missing_audit"],
-  "A10:2021-Server-Side Request Forgery (SSRF)": ["ssrf"]
+import data.security.metadata
+
+# Approved CVE exceptions are read from data.exceptions (loaded via --data exceptions/).
+# Only findings whose exception has not expired are exempt.
+approved_cve(id) if {
+  some e in data.exceptions.exceptions
+  e.vulnerability_id == id
+  e.expires_at > time.now_ns()
 }
 
-# Deny input if it triggers OWASP top 10 risks
-deny[msg] {
-  result := input.Results[_]
-  vuln := result.Vulnerabilities[_]
+# Map a finding's description to an OWASP Top 10 (2021) category.
+owasp_category(vuln) := "A03:2021-Injection" if {
+  desc := lower(vuln.Description)
+  some pattern in ["sql injection", "command injection", "rce"]
+  contains(desc, pattern)
+}
 
-  # Ignore approved exceptions
-  not common.approved_cve(vuln.VulnerabilityID)
+owasp_category(vuln) := "A06:2021-Vulnerable and Outdated Components" if {
+  desc := lower(vuln.Description)
+  some pattern in ["unpatched", "library"]
+  contains(desc, pattern)
+}
 
-  # Map CVE / description to OWASP risk categories
-  risk_category := map_to_owasp(vuln)
-  risk_category != ""
+owasp_category(vuln) := "A05:2021-Security Misconfiguration" if {
+  desc := lower(vuln.Description)
+  some pattern in ["misconfiguration", "default password"]
+  contains(desc, pattern)
+}
 
-  severity := common.severity_rank[vuln.Severity]
-  severity >= common.deny_threshold(input.environment)
+owasp_category(vuln) := "A01:2021-Broken Access Control" if {
+  desc := lower(vuln.Description)
+  some pattern in ["privilege escalation", "unauthorized"]
+  contains(desc, pattern)
+}
+
+deny contains msg if {
+  some result in input.Results
+  some vuln in result.Vulnerabilities
+
+  not approved_cve(vuln.VulnerabilityID)
+
+  category := owasp_category(vuln)
 
   msg := sprintf(
-    "OWASP Violation: %s in %s triggers %s (Severity: %s)",
-    [vuln.VulnerabilityID, result.Target, risk_category, vuln.Severity]
+    "[Policy %s] OWASP Violation: %s in %s triggers %s (Severity: %s)",
+    [metadata.policy_version, vuln.VulnerabilityID, result.Target, category, vuln.Severity]
   )
 }
-
-# Simple mapping function: description -> OWASP risk
-map_to_owasp(vuln) = risk {
-  desc := lower(vuln.Description)
-
-  risk := "A3:2021-Injection" {
-    contains(desc, "sql injection") 
-    or contains(desc, "command injection") 
-    or contains(desc, "rce")
-  }
-
-  risk := "A6:2021-Vulnerable and Outdated Components" {
-    contains(desc, "unpatched") 
-    or contains(desc, "library")
-  }
-
-  risk := "A5:2021-Security Misconfiguration" {
-    contains(desc, "misconfiguration") 
-    or contains(desc, "default password")
-  }
-
-  risk := "A1:2021-Broken Access Control" {
-    contains(desc, "privilege escalation") 
-    or contains(desc, "unauthorized")
-  }
-
-  # default to empty if no match
-  risk := "" { not risk }
-}
-*/#
