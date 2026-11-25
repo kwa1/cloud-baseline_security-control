@@ -57,6 +57,7 @@ def analyze(input_file, output_file, environment):
                 "id": vuln.get("VulnerabilityID"),
                 "package": vuln.get("PkgName"),
                 "installed_version": vuln.get("InstalledVersion"),
+                "fixed_version": vuln.get("FixedVersion", ""),
                 "severity": vuln.get("Severity"),
                 "owasp": owasp,
                 "controls": CONTROL_MAP.get(owasp, {})
