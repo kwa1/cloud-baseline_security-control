@@ -20,10 +20,6 @@ on:
         required: true
         type: string
     secrets:
-      REGISTRY_USERNAME:
-        required: true
-      REGISTRY_PASSWORD:
-        required: true
       SLACK_WEBHOOK_URL:
         required: true
 

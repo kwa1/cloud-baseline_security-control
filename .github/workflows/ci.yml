@@ -69,6 +69,4 @@ jobs:
       aws_role_arn: ${{ vars.AWS_SECURITY_GATES_ROLE_ARN }}
       s3_bucket: ${{ vars.SECURITY_REPORTS_S3_BUCKET }}
     secrets:
-      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
